@@ -10,14 +10,14 @@
 # 进入脚本所在目录（即 backend），保证后续 pwd 是 backend
 cd "$(dirname "$0")"
 
-# 上两级目录 = 项目根 agent_memory_demo
+# 上两级目录 = 仓库根目录（含 venv / .env）
 ROOT="$(cd ../.. && pwd)"
 
 # 若项目根下存在 venv，就激活它；否则提示用户先创建并安装依赖
 if [ -d "$ROOT/venv" ]; then
   source "$ROOT/venv/bin/activate"
 else
-  echo "请先在项目根目录创建 venv 并安装依赖: python -m venv venv && source venv/bin/activate && pip install -r mem0_memory_gaming_app/backend/requirements.txt"
+  echo "请先在项目根目录创建 venv 并安装依赖: python -m venv venv && source venv/bin/activate && pip install -r ai-npc/backend/requirements.txt"
   exit 1
 fi
 

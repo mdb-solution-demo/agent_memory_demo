@@ -61,7 +61,7 @@
 ## 📁 目录结构
 
 ```
-mem0_memory_gaming_app/
+ai-npc/
 ├── backend/
 │   ├── config.py              # 环境变量与配置
 │   ├── db_init.py             # 启动时创建库/表/索引（存在则跳过）
@@ -105,14 +105,14 @@ mem0_memory_gaming_app/
 **推荐**（使用 `run.sh`）：
 
 ```bash
-cd mem0_memory_gaming_app/backend
+cd ai-npc/backend
 ./run.sh
 ```
 
 **手动启动**：
 
 ```bash
-cd mem0_memory_gaming_app/backend
+cd ai-npc/backend
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 export PYTHONPATH=$(pwd)
@@ -124,7 +124,7 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ### 2. 前端
 
 ```bash
-cd mem0_memory_gaming_app/frontend
+cd ai-npc/frontend
 python -m http.server 5500
 ```
 
@@ -245,14 +245,14 @@ Required:
 Backend:
 
 ```bash
-cd mem0_memory_gaming_app/backend
+cd ai-npc/backend
 ./run.sh
 ```
 
 Frontend:
 
 ```bash
-cd mem0_memory_gaming_app/frontend
+cd ai-npc/frontend
 python -m http.server 5500
 ```
 
