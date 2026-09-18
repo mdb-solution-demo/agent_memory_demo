@@ -114,9 +114,27 @@
         object-fit: contain;
       }
       .app-header__title {
-        font-size: 1.125rem;
+        font-size: 1.5rem;
         font-weight: 600;
         margin: 0;
+      }
+      .app-header__title-row {
+        display: flex;
+        flex-direction: row;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: var(--space-md);
+        min-width: 0;
+      }
+      .app-header__theme {
+        display: inline-block;
+        font-size: 0.875rem;
+        font-weight: 500;
+        color: var(--text-muted);
+        letter-spacing: 0.02em;
+        line-height: 1.35;
+        max-width: 100%;
+        white-space: nowrap;
       }
       .app-header__right {
         margin-left: auto;
@@ -503,13 +521,13 @@
           height="28"
         />
       </a>
-      <h1 class="app-header__title">开放世界 NPC 对话记忆</h1>
-      <div class="form-group">
-        <label for="backend-select">记忆后端</label>
-        <select id="backend-select" aria-label="记忆后端">
-          <option value="mongodb" selected>MongoDB</option>
-          <option value="postgres">PostgreSQL</option>
-        </select>
+      <div class="app-header__title-row">
+        <h1 class="app-header__title">开放世界 NPC 对话记忆 Demo</h1>
+        <span
+          id="game-theme-badge"
+          class="app-header__theme"
+          aria-live="polite"
+        ></span>
       </div>
       <div class="form-group">
         <label for="user-id">玩家 ID</label>
@@ -517,13 +535,13 @@
       </div>
       <div class="form-group">
         <label for="npc-id">当前 NPC</label>
-        <select id="npc-id" aria-label="当前 NPC" title="选择固定场景 NPC">
-          <option value="katheryne" selected>凯瑟琳 (Katheryne)</option>
-          <option value="beidou">北斗 (Beidou)</option>
-          <option value="albedo">阿贝多 (Albedo)</option>
-          <option value="zhongli">钟离 (Zhongli)</option>
-          <option value="hu_tao">胡桃 (Hu Tao)</option>
-          <option value="ayaka">神里绫华 (Ayaka)</option>
+        <select
+          id="npc-id"
+          aria-label="当前 NPC"
+          title="选择固定场景 NPC"
+          aria-busy="true"
+        >
+          <option value="">加载中…</option>
         </select>
       </div>
       <div class="app-header__right">
@@ -717,7 +735,7 @@
                   <input
                     type="text"
                     id="mem-by-agent-id"
-                    placeholder="NPC：katheryne / beidou / albedo / zhongli / hu_tao / ayaka"
+                    placeholder="NPC ID（留空则用上方「当前 NPC」所选）"
                     aria-label="NPC ID"
                     style="min-width: 220px"
                   />
@@ -753,7 +771,7 @@
                   <input
                     type="text"
                     id="mem-delete-all-agent-id"
-                    placeholder="NPC：katheryne / beidou / albedo / …"
+                    placeholder="NPC ID（留空则用上方「当前 NPC」所选）"
                     aria-label="NPC ID"
                     style="min-width: 180px"
                   />
@@ -1002,16 +1020,19 @@
         };
 
         const API_BASE = CONFIG.getApiBase();
+        const NPC_ID_STORAGE_KEY = "mem0_npc_id";
+        /** 由 GET /health 填充，供 loadNpcList 默认选中与页头展示 */
+        var serverDefaultNpcId = "";
+        var serverGameTheme = "";
 
         // ---------- Labels ----------
         const LABELS = {
-          backend: (v) => (v === "postgres" ? "PostgreSQL" : "MongoDB"),
+          backend: () => "MongoDB",
         };
 
         // ---------- DOM refs ----------
         const refs = {
           apiUrl: document.getElementById("api-url"),
-          backendSelect: document.getElementById("backend-select"),
           messages: document.getElementById("messages"),
           input: document.getElementById("input"),
           send: document.getElementById("send"),
@@ -1069,13 +1090,16 @@
         };
 
         function getBackend() {
-          return refs.backendSelect ? refs.backendSelect.value : "mongodb";
+          return "mongodb";
         }
         function getUserId() {
           return (refs.userId && refs.userId.value.trim()) || "player-1";
         }
         function getNpcId() {
-          return (refs.npcId && refs.npcId.value.trim()) || "katheryne";
+          var fromSel = refs.npcId && refs.npcId.value.trim();
+          if (fromSel) return fromSel;
+          var d = (serverDefaultNpcId || "").trim();
+          return d || "katheryne";
         }
 
         function getWikiFtsWeight() {
@@ -1158,7 +1182,7 @@
             }
           } catch (_) {}
         }
-        /** 与对话接口一致：使用当前所选固定 NPC 的 agent_id（默认 Katheryne） */
+        /** 与对话接口一致：使用当前所选固定 NPC 的 agent_id（默认由服务端 NPC 列表首项决定） */
         function getAgentIdForStorage() {
           return getNpcId();
         }
@@ -1228,13 +1252,8 @@
         }
 
         function getStatusLine(prefix = "") {
-          const backend = refs.backendSelect
-            ? refs.backendSelect.value
-            : "mongodb";
           const p = prefix ? prefix + " · " : "";
-          return (
-            p + "记忆后端: " + LABELS.backend(backend) + " · LLM: DeepSeek"
-          );
+          return p + "记忆后端: " + LABELS.backend() + " · LLM: DeepSeek";
         }
 
         // ---------- Messages ----------
@@ -1299,15 +1318,98 @@
 
         // ---------- API ----------
         async function checkHealth() {
+          const themeEl = document.getElementById("game-theme-badge");
+          serverDefaultNpcId = "";
+          serverGameTheme = "";
+          if (themeEl) themeEl.textContent = "";
           try {
             const r = await fetch(API_BASE + "/health", { method: "GET" });
             if (r.ok) {
+              var data = {};
+              try {
+                data = await r.json();
+              } catch (_) {}
+              serverGameTheme = String(data.game_theme || "").trim();
+              serverDefaultNpcId = String(data.default_npc_id || "").trim();
+              if (themeEl) {
+                themeEl.textContent = serverGameTheme
+                  ? "游戏主题：" + serverGameTheme
+                  : "";
+              }
               setStatus(getStatusLine("已连接"), false);
             } else {
+              if (themeEl) themeEl.textContent = "—";
               setStatus(getStatusLine("后端异常 " + r.status), true);
             }
           } catch (_) {
+            if (themeEl) themeEl.textContent = "—";
             setStatus(getStatusLine("未连接"), true);
+          }
+        }
+
+        /** 从 GET /npcs 填充下拉，与后端 npc_personas 单一数据源对齐 */
+        async function loadNpcList() {
+          const sel = refs.npcId;
+          if (!sel) return;
+          try {
+            const res = await fetch(API_BASE + "/npcs", { method: "GET" });
+            if (!res.ok) throw new Error("HTTP " + res.status);
+            const list = await res.json();
+            if (!Array.isArray(list) || list.length === 0)
+              throw new Error("NPC 列表为空");
+
+            sel.innerHTML = "";
+            var saved = "";
+            try {
+              saved = (localStorage.getItem(NPC_ID_STORAGE_KEY) || "").trim();
+            } catch (_) {}
+
+            list.forEach(function (item) {
+              var opt = document.createElement("option");
+              opt.value = (item.id || "").trim();
+              opt.textContent =
+                item.label ||
+                (item.name_zh || "") +
+                  (item.name_en ? " (" + item.name_en + ")" : "");
+              sel.appendChild(opt);
+            });
+
+            var matched = false;
+            var i;
+            for (i = 0; i < sel.options.length; i++) {
+              if (sel.options[i].value === saved) {
+                sel.selectedIndex = i;
+                matched = true;
+                break;
+              }
+            }
+            if (!matched && serverDefaultNpcId) {
+              for (i = 0; i < sel.options.length; i++) {
+                if (sel.options[i].value === serverDefaultNpcId) {
+                  sel.selectedIndex = i;
+                  matched = true;
+                  break;
+                }
+              }
+            }
+            if (!matched) sel.selectedIndex = 0;
+
+            sel.setAttribute("aria-busy", "false");
+            try {
+              localStorage.setItem(NPC_ID_STORAGE_KEY, sel.value);
+            } catch (_) {}
+          } catch (e) {
+            sel.innerHTML = "";
+            var opt = document.createElement("option");
+            opt.value = "katheryne";
+            opt.textContent = "katheryne（列表加载失败，已用默认）";
+            sel.appendChild(opt);
+            sel.selectedIndex = 0;
+            sel.setAttribute("aria-busy", "false");
+            setStatus(
+              getStatusLine("NPC 列表加载失败: " + (e.message || String(e))),
+              true,
+            );
           }
         }
 
@@ -1334,7 +1436,7 @@
                   typeof getCurrentSessionId === "function"
                     ? getCurrentSessionId()
                     : null,
-                backend: refs.backendSelect.value,
+                backend: getBackend(),
                 short_term_expiration_days: getShortTermRetentionDays(),
                 recall_memory_vector: !!(
                   refs.recallMemoryVector && refs.recallMemoryVector.checked
@@ -1375,7 +1477,6 @@
               data.recalled_memories || [],
               data.memory_type_this_turn,
             );
-            if (data.backend) refs.backendSelect.value = data.backend;
             setStatus(getStatusLine());
           } catch (e) {
             const msg = e.message || String(e);
@@ -1859,13 +1960,17 @@
         function init() {
           refs.apiUrl.textContent = "API: " + API_BASE;
           setStatus(getStatusLine("加载中…"));
-          checkHealth();
+          if (refs.send) refs.send.disabled = true;
+          checkHealth()
+            .then(function () {
+              return loadNpcList();
+            })
+            .finally(function () {
+              if (refs.send) refs.send.disabled = false;
+            });
           setupResizer();
           setupTabs();
           startLogStream();
-          refs.backendSelect.addEventListener("change", () =>
-            setStatus(getStatusLine()),
-          );
           refs.send.addEventListener("click", sendChat);
           refs.input.addEventListener("keydown", (e) => {
             if (e.key === "Enter" && !e.shiftKey) {
@@ -1938,6 +2043,10 @@
           }
           if (refs.npcId) {
             refs.npcId.addEventListener("change", function () {
+              try {
+                var v = refs.npcId.value.trim();
+                if (v) localStorage.setItem(NPC_ID_STORAGE_KEY, v);
+              } catch (_) {}
               if (refs.messages) refs.messages.innerHTML = "";
               resetChatHistoryForCurrentSession();
             });

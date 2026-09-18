@@ -3,8 +3,6 @@ mem0ai
 voyageai>=0.3.0
 langchain-voyageai>=0.1.0
 pymongo>=4.0.0
-pgvector>=0.2.0
-psycopg2-binary>=2.9.0
 
 # API & server
 fastapi>=0.109.0

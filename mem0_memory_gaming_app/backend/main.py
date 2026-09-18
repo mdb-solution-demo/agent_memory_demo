@@ -12,11 +12,12 @@ import time
 from collections import deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Deque, Dict, List, Literal, Optional, Tuple
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from config import (
@@ -25,10 +26,12 @@ from config import (
     CLASSIFY_SYSTEM,
     DEEPSEEK_API_KEY,
     DEEPSEEK_MODEL,
+    GAME_THEME,
     GAME_WIKI_ENABLED,
     GAME_WIKI_RECALL_LIMIT,
     GAME_WIKI_RECALL_MAX_CHARS,
     MONGODB_URI,
+    NPC_NAME,
     VOYAGE_API_KEY,
 )
 from custom_categories import (
@@ -50,9 +53,12 @@ from mongodb_search import (
     voyage_rerank_pool_size,
 )
 from npc_personas import (
+    FIXED_NPC_IDS,
+    default_npc_id_for_theme,
     get_npc_system_prompt,
     list_npc_public_info,
     normalize_npc_id,
+    npc_allowed_for_theme,
     validate_npc_id_for_chat,
 )
 
@@ -130,7 +136,7 @@ class ChatRequest(BaseModel):
     user_id: str = Field(default="player-1")
     npc_id: Optional[str] = Field(default=None)
     session_id: Optional[str] = Field(default=None, description="当前会话 ID，用于短期记忆召回与写入")
-    backend: str = Field(default="mongodb", description="mongodb | postgres")
+    backend: str = Field(default="mongodb", description="仅支持 mongodb")
     short_term_expiration_days: Optional[int] = Field(
         default=7, ge=1, le=365,
         description="短期记忆保留天数，判定为 short_term 时写入 expiration_time = now + N days",
@@ -173,11 +179,11 @@ class MemorySearchQuery(BaseModel):
     query: str = Field(..., min_length=1)
     user_id: str = Field(default="player-1")
     agent_id: Optional[str] = Field(default=None)
-    backend: str = Field(default="mongodb", description="mongodb | postgres")
+    backend: str = Field(default="mongodb", description="仅支持 mongodb")
     limit: int = Field(default=10, ge=1, le=100)
     memory_category: Optional[str] = Field(
         default=None,
-        description="按 memory_metadata 该键存在且值非空过滤（服务端在结果侧匹配，Mongo/PostgreSQL 一致）",
+        description="按 memory_metadata 该键存在且值非空过滤（服务端在结果侧匹配）",
     )
     use_reranker: bool = Field(
         default=False,
@@ -453,8 +459,8 @@ def _category_filters_for_backend(_backend: str, memory_category: Optional[str])
 @app.post("/chat", response_model=ChatResponse)
 def chat(req: ChatRequest, background_tasks: BackgroundTasks) -> ChatResponse:
     backend = (req.backend or "mongodb").strip().lower()
-    if backend not in ("mongodb", "postgres"):
-        raise HTTPException(status_code=400, detail="backend 只能是 mongodb 或 postgres")
+    if backend != "mongodb":
+        raise HTTPException(status_code=400, detail="backend 仅支持 mongodb")
     user_id = (req.user_id or "player-1").strip()
     try:
         validate_npc_id_for_chat(req.npc_id)
@@ -479,14 +485,14 @@ def chat(req: ChatRequest, background_tasks: BackgroundTasks) -> ChatResponse:
     short_results: list[dict] = []
     recall_mv = req.recall_memory_vector
     mem_filter_mode = req.memory_vector_filter_mode
-    # MongoDB：post-filter 使用 mem0 原生 search（与库默认行为一致）；pre-filter 使用自定义 $vectorSearch 预过滤
-    mongo_use_mem0_search = backend == "mongodb" and mem_filter_mode == "post-filter"
+    # post-filter 使用 mem0 原生 search；pre-filter 使用自定义 $vectorSearch 预过滤
+    mongo_use_mem0_search = mem_filter_mode == "post-filter"
 
     # Step1：召回长期记忆（无 run_id）；开启 rerank 时先扩大候选池再截断到 RECALL_LIMIT_LONG
     mem_fetch_limit = voyage_rerank_pool_size(RECALL_LIMIT_LONG) if req.use_reranker else RECALL_LIMIT_LONG
     if recall_mv:
         try:
-            if mongo_use_mem0_search or backend == "postgres":
+            if mongo_use_mem0_search:
                 long_result = memory.search(
                     query=message,
                     user_id=user_id,
@@ -522,7 +528,7 @@ def chat(req: ChatRequest, background_tasks: BackgroundTasks) -> ChatResponse:
     #     logger.info("当前会话ID: %s", session_id)
     # if recall_mv and session_id:
     #     try:
-    #         if mongo_use_mem0_search or backend == "postgres":
+    #         if mongo_use_mem0_search:
     #             short_result = memory.search(
     #                 query=message,
     #                 user_id=user_id,
@@ -563,7 +569,6 @@ def chat(req: ChatRequest, background_tasks: BackgroundTasks) -> ChatResponse:
     wiki_snippets: list[str] = []
     if (
         req.recall_wiki_hybrid
-        and backend == "mongodb"
         and GAME_WIKI_ENABLED
         and MONGODB_URI.strip()
     ):
@@ -644,9 +649,30 @@ def chat(req: ChatRequest, background_tasks: BackgroundTasks) -> ChatResponse:
 
  
 
+FRONTEND_INDEX = Path(__file__).resolve().parent.parent / "frontend" / "index.html"
+
+
+@app.get("/")
+def serve_frontend():
+    """浏览器打开 http://localhost:8000/ 时直接返回前端页面。"""
+    if not FRONTEND_INDEX.is_file():
+        raise HTTPException(status_code=404, detail="frontend/index.html 不存在")
+    return FileResponse(FRONTEND_INDEX)
+
+
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    raw = (NPC_NAME or "").strip()
+    theme_default = default_npc_id_for_theme()
+    if raw in FIXED_NPC_IDS and npc_allowed_for_theme(raw):
+        default_npc_id = raw
+    else:
+        default_npc_id = theme_default
+    return {
+        "status": "ok",
+        "game_theme": GAME_THEME,
+        "default_npc_id": default_npc_id,
+    }
 
 
 @app.get("/npcs")
@@ -659,8 +685,8 @@ def list_npcs() -> List[Dict[str, Any]]:
 # -----------------------------------------------------
 def _norm_backend(backend: str) -> str:
     b = (backend or "mongodb").strip().lower()
-    if b not in ("mongodb", "postgres"):
-        raise HTTPException(status_code=400, detail="backend 只能是 mongodb 或 postgres")
+    if b != "mongodb":
+        raise HTTPException(status_code=400, detail="backend 仅支持 mongodb")
     return b
 
 
@@ -771,23 +797,14 @@ def memory_search(body: MemorySearchQuery) -> Dict[str, Any]:
     cat_f, need_cat_pf = _category_filters_for_backend(backend, body.memory_category)
     fetch_limit = voyage_rerank_pool_size(body.limit) if body.use_reranker else body.limit
     try:
-        if backend == "mongodb":
-            result = _mongodb_search_memories(
-                memory,
-                body.query,
-                user_id=(body.user_id or "player-1").strip(),
-                agent_id=agent_id,
-                limit=fetch_limit,
-                filters=cat_f if cat_f else None,
-            )
-        else:
-            result = memory.search(
-                query=body.query,
-                user_id=(body.user_id or "player-1").strip(),
-                agent_id=agent_id,
-                limit=fetch_limit,
-                filters=cat_f if cat_f else None,
-            )
+        result = _mongodb_search_memories(
+            memory,
+            body.query,
+            user_id=(body.user_id or "player-1").strip(),
+            agent_id=agent_id,
+            limit=fetch_limit,
+            filters=cat_f if cat_f else None,
+        )
     except Exception as e:
         logger.warning("memory.search 失败: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -829,7 +846,7 @@ def memory_search(body: MemorySearchQuery) -> Dict[str, Any]:
 @app.get("/memory/{memory_id}")
 def memory_get(
     memory_id: str,
-    backend: str = Query("mongodb", description="mongodb | postgres"),
+    backend: str = Query("mongodb", description="仅支持 mongodb"),
 ) -> Dict[str, Any]:
     """按 ID 获取单条记忆。"""
     backend = _norm_backend(backend)
